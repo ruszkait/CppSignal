@@ -10,26 +10,11 @@
 
 namespace CppSignal
 {
-	enum class RegistrationStatus
-	{
-		Unknown,
-		Empty,
-		Populating,
-		Used,
-		Emitting,
-		Destroying,
-		PendingDestruction
-	};
-
-	class IRegistation
+	class IRegistration
 	{
 	public:
-		IRegistation();
-
-		virtual ~IRegistation() = default;
-		virtual void Unsubscribe() = 0;
-
-		std::atomic<RegistrationStatus> _status;
+		virtual ~IRegistration() = default;
+		virtual void Deallocate() = 0;
 	};
 
 	class Subscription;
@@ -51,18 +36,31 @@ namespace CppSignal
 		void Emit(TSignalParameters... signalParameters);
 
 	private:
-		class Registration : public IRegistation
+		class Registration : public IRegistration
 		{
 		public:
-			void Unsubscribe() override;
+			bool TryAllocate(const Callback& callback);
+			bool TryAllocate(Callback&& callback);
+
+			void Deallocate() override;
 
 			void Emit(TSignalParameters ... signalParameters);
 
+		private:
+			enum class RegistrationStatus
+			{
+				Unknown,
+				Empty,
+				Populating,
+				Used,
+				Emitting,
+				Destroying,
+				PendingDestruction
+			};
+
+			std::atomic<RegistrationStatus> _status = RegistrationStatus::Empty;
 			Callback _callback;
 		};
-
-		IRegistation & SaveCallbackToAnUnusedRegistration(const Callback& callback);
-		IRegistation & SaveCallbackToAnUnusedRegistration(Callback&& callback);
 
 		// This container must not reallocate, because the subscriptions directly hold an aliasing smart pointer to the registration instances
 		std::vector<Registration> _registrations;
@@ -85,10 +83,10 @@ namespace CppSignal
 		template<typename ...TSignalParameters>
 		friend class Signal;
 
-		Subscription(std::weak_ptr<IRegistation>&& registration);
+		Subscription(std::weak_ptr<IRegistration>&& registration);
 
 		// Aliasing smart pointer: the control block belongs to the publisher, the pointer belongs to the registration
-		std::weak_ptr<IRegistation> _registration;
+		std::weak_ptr<IRegistration> _registration;
 	};
 
 // ==========================================================================================================================
@@ -102,21 +100,36 @@ namespace CppSignal
 	template<typename TPublisher>
 	Subscription Signal<TSignalParameters...>::Subscribe(const std::shared_ptr<TPublisher>& publisher, const Callback& callback)
 	{
-		// This template method is duplicated for each Publisher type. To minimize the code here, the saving of the callback is outsourced
-		auto& registration = SaveCallbackToAnUnusedRegistration(callback);
+		for (auto& registration : _registrations)
+		{
+			auto subscrptionAccepted = registration.TryAllocate(callback);
+			if (subscrptionAccepted)
+			{
+				auto registrationPointer = std::shared_ptr<IRegistration>(publisher, &registration);
+				return Subscription(registrationPointer);
+			}
+		}
 
-		auto registrationPointer = std::shared_ptr<IRegistation>(publisher, &registration);
-		return Subscription(registrationPointer);
+		// No free registration left
+		throw std::bad_alloc();
 	}
 
 	template<typename ...TSignalParameters>
 	template<typename TPublisher>
 	Subscription Signal<TSignalParameters...>::Subscribe(const std::shared_ptr<TPublisher>& publisher, Callback && callback)
 	{
-		auto& registration = SaveCallbackToAnUnusedRegistration(std::move(callback));
+		for (auto& registration : _registrations)
+		{
+			auto subscrptionAccepted = registration.TryAllocate(std::move(callback));
+			if (subscrptionAccepted)
+			{
+				auto registrationPointer = std::shared_ptr<IRegistration>(publisher, &registration);
+				return Subscription(registrationPointer);
+			}
+		}
 
-		auto registrationPointer = std::shared_ptr<IRegistation>(publisher, &registration);
-		return Subscription(registrationPointer);
+		// No free registration left
+		throw std::bad_alloc();
 	}
 
 	template<typename ...TSignalParameters>
@@ -128,56 +141,44 @@ namespace CppSignal
 		}
 	}
 
+// ==========================================================================================================================
+
 	template<typename ...TSignalParameters>
-	IRegistation & Signal<TSignalParameters...>::SaveCallbackToAnUnusedRegistration(const Callback & callback)
+	bool Signal<TSignalParameters...>::Registration::TryAllocate(const Callback & callback)
 	{
-		for (auto& registration : _registrations)
-		{
-			auto lastKnownCurrentRegistrationStatus = RegistrationStatus::Empty;
-			auto transitionSucceeded = registration._status.compare_exchange_strong(lastKnownCurrentRegistrationStatus, RegistrationStatus::Populating);
-			if (!transitionSucceeded)
-				continue;
+		auto lastKnownCurrentRegistrationStatus = RegistrationStatus::Empty;
+		auto transitionSucceeded = _status.compare_exchange_strong(lastKnownCurrentRegistrationStatus, RegistrationStatus::Populating);
+		if (!transitionSucceeded)
+			return false;
 
-			registration._callback = callback;
+		_callback = callback;
 
-			lastKnownCurrentRegistrationStatus = RegistrationStatus::Populating;
-			transitionSucceeded = registration._status.compare_exchange_strong(lastKnownCurrentRegistrationStatus, RegistrationStatus::Used);
-			assert(transitionSucceeded);
-
-			return registration;
-		}
-
-		// No free registration left
-		throw std::bad_alloc();
+		lastKnownCurrentRegistrationStatus = RegistrationStatus::Populating;
+		transitionSucceeded = _status.compare_exchange_strong(lastKnownCurrentRegistrationStatus, RegistrationStatus::Used);
+		assert(transitionSucceeded);
+		
+		return true;
 	}
 
 	template<typename ...TSignalParameters>
-	IRegistation & Signal<TSignalParameters...>::SaveCallbackToAnUnusedRegistration(Callback && callback)
+	bool Signal<TSignalParameters...>::Registration::TryAllocate(Callback && callback)
 	{
-		for (auto& registration : _registrations)
-		{
-			auto lastKnownCurrentRegistrationStatus = RegistrationStatus::Empty;
-			auto transitionSucceeded = registration._status.compare_exchange_strong(lastKnownCurrentRegistrationStatus, RegistrationStatus::Populating);
-			if (!transitionSucceeded)
-				continue;
+		auto lastKnownCurrentRegistrationStatus = RegistrationStatus::Empty;
+		auto transitionSucceeded = _status.compare_exchange_strong(lastKnownCurrentRegistrationStatus, RegistrationStatus::Populating);
+		if (!transitionSucceeded)
+			return false;
 
-			registration._callback = std::move(callback);
+		_callback = std::move(callback);
 
-			lastKnownCurrentRegistrationStatus = RegistrationStatus::Populating;
-			transitionSucceeded = registration._status.compare_exchange_strong(lastKnownCurrentRegistrationStatus, RegistrationStatus::Used);
-			assert(transitionSucceeded);
+		lastKnownCurrentRegistrationStatus = RegistrationStatus::Populating;
+		transitionSucceeded = _status.compare_exchange_strong(lastKnownCurrentRegistrationStatus, RegistrationStatus::Used);
+		assert(transitionSucceeded);
 
-			return registration;
-		}
-
-		// No free registration left
-		throw std::bad_alloc();
+		return true;
 	}
 
-	// ==========================================================================================================================
-
 	template<typename ...TSignalParameters>
-	void Signal<TSignalParameters...>::Registration::Unsubscribe()
+	void Signal<TSignalParameters...>::Registration::Deallocate()
 	{
 		bool stayInLoop = true;
 		while (stayInLoop)
@@ -227,6 +228,7 @@ namespace CppSignal
 				continue;
 			}
 
+			// The Registration is not in a state where emission is possible
 			return;
 		}
 

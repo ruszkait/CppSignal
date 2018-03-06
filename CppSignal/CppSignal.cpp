@@ -2,15 +2,10 @@
 
 using namespace CppSignal;
 
-IRegistation::IRegistation()
-	: _status(RegistrationStatus::Empty)
-{
-}
-
 Subscription::Subscription()
 {}
 
-Subscription::Subscription(std::weak_ptr<IRegistation>&& registration)
+Subscription::Subscription(std::weak_ptr<IRegistration>&& registration)
 	: _registration(std::move(registration))
 {}
 
@@ -40,7 +35,7 @@ void CppSignal::Subscription::Unsubscribe()
 		return;
 
 	auto& registrationReference = publisherStrongReference;
-	registrationReference->Unsubscribe();
+	registrationReference->Deallocate();
 }
 
 Subscription::~Subscription()
