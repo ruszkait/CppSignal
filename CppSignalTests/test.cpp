@@ -174,3 +174,35 @@ TEST(SelfUnsubscriptionInEmissionTest, CppSignalTest)
 	thermometer->UpdateTemperature(20);
 	EXPECT_DOUBLE_EQ(-10.0, temperatureNotification);
 }
+
+TEST(ParallelEmissionTest, CppSignalTest)
+{
+	auto thermometer = std::make_shared<Thermometer>();
+
+	std::atomic<int> callbackCount(0);
+
+	CppSignal::Subscription subscription;
+	subscription = thermometer->OnTemperatureChanged([&callbackCount](double value)
+	{
+		callbackCount++;
+	});
+
+	const int numberOfIterations = 100000;
+
+	std::thread thread1([thermometer, numberOfIterations]
+	{
+		for (int i = 0; i < numberOfIterations; ++i)
+			thermometer->UpdateTemperature(10);
+	});
+
+	std::thread thread2([thermometer, numberOfIterations]
+	{
+		for (int i = 0; i < numberOfIterations; ++i)
+			thermometer->UpdateTemperature(10);
+	});
+
+	thread1.join();
+	thread2.join();
+
+	EXPECT_EQ(2*numberOfIterations, callbackCount);
+}

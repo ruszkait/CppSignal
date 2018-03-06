@@ -5,6 +5,8 @@
 #include <memory>
 #include <vector>
 #include <utility>
+#include <thread>
+#include <chrono>
 
 namespace CppSignal
 {
@@ -120,11 +122,26 @@ namespace CppSignal
 	{
 		for (auto& registration : _registrations)
 		{
-			RegistrationStatus lastKnownCurrentRegistrationStatus = registration._status;
-			if (lastKnownCurrentRegistrationStatus != RegistrationStatus::Used)
-				continue;
+			RegistrationStatus lastKnownCurrentRegistrationStatus;
 
-			auto transitionSucceeded = registration._status.compare_exchange_strong(lastKnownCurrentRegistrationStatus, RegistrationStatus::Emitting);
+			bool transitionSucceeded;
+			while(true)
+			{
+				lastKnownCurrentRegistrationStatus = RegistrationStatus::Used;
+				transitionSucceeded = registration._status.compare_exchange_strong(lastKnownCurrentRegistrationStatus, RegistrationStatus::Emitting);
+				if (transitionSucceeded)
+					break;
+
+				auto anEmissionIsAlreadyRunningFromAnotherThread = lastKnownCurrentRegistrationStatus == RegistrationStatus::Emitting;
+				if (anEmissionIsAlreadyRunningFromAnotherThread)
+				{
+					std::this_thread::sleep_for(std::chrono::milliseconds(1));
+					continue;
+				}
+
+				break;
+			}
+
 			if (!transitionSucceeded)
 				continue;
 
