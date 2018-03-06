@@ -38,14 +38,6 @@ namespace CppSignal
 	public:
 		using Callback = std::function<void(TSignalParameters...)>;
 
-		class Registration : public IRegistation
-		{
-		public:
-			void Unsubscribe() override;
-
-			Callback _callback;
-		};
-
 		Signal(int numberOfMaxRegistrations = 5);
 
 		template<typename TPublisher>
@@ -57,6 +49,14 @@ namespace CppSignal
 		void Emit(TSignalParameters... signalParameters);
 
 	private:
+		class Registration : public IRegistation
+		{
+		public:
+			void Unsubscribe() override;
+
+			Callback _callback;
+		};
+
 		IRegistation & SaveCallbackToAnUnusedRegistration(const Callback& callback);
 		IRegistation & SaveCallbackToAnUnusedRegistration(Callback&& callback);
 
@@ -69,8 +69,6 @@ namespace CppSignal
 	public:
 		Subscription();
 
-		Subscription(const std::weak_ptr<IRegistation>& registration);
-
 		Subscription(Subscription&& other);
 
 		Subscription& operator=(Subscription&& other);
@@ -80,6 +78,11 @@ namespace CppSignal
 		~Subscription();
 
 	private:
+		template<typename ...TSignalParameters>
+		friend class Signal;
+
+		Subscription(std::weak_ptr<IRegistation>&& registration);
+
 		// Aliasing smart pointer: the control block belongs to the publisher, the pointer belongs to the registration
 		std::weak_ptr<IRegistation> _registration;
 	};
@@ -94,7 +97,7 @@ namespace CppSignal
 		auto& registration = SaveCallbackToAnUnusedRegistration(callback);
 
 		auto registrationPointer = std::shared_ptr<IRegistation>(publisher, &registration);
-		return Subscription(std::weak_ptr<IRegistation>(registrationPointer));
+		return Subscription(registrationPointer);
 	}
 
 	template<typename ...TSignalParameters>
@@ -104,7 +107,7 @@ namespace CppSignal
 		auto& registration = SaveCallbackToAnUnusedRegistration(std::move(callback));
 
 		auto registrationPointer = std::shared_ptr<IRegistation>(publisher, &registration);
-		return Subscription(std::weak_ptr<IRegistation>(registrationPointer));
+		return Subscription(registrationPointer);
 	}
 
 	template<typename ...TSignalParameters>

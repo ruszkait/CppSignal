@@ -155,3 +155,22 @@ TEST(SubscriptionReassignmentTest, CppSignalTest)
 	EXPECT_DOUBLE_EQ(0.0, temperatureNotification);
 	EXPECT_EQ(1, freezingDays);
 }
+
+TEST(SelfUnsubscriptionInEmissionTest, CppSignalTest)
+{
+	auto thermometer = std::make_shared<Thermometer>();
+
+	auto temperatureNotification = 0.0;
+	CppSignal::Subscription subscription;
+	subscription = thermometer->OnTemperatureChanged([&temperatureNotification, &subscription](double value) 
+		{
+			temperatureNotification = value;
+			subscription.Unsubscribe();
+		});
+
+	thermometer->UpdateTemperature(-10);
+	EXPECT_DOUBLE_EQ(-10.0, temperatureNotification);
+
+	thermometer->UpdateTemperature(20);
+	EXPECT_DOUBLE_EQ(-10.0, temperatureNotification);
+}

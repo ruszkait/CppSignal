@@ -10,8 +10,8 @@ IRegistation::IRegistation()
 Subscription::Subscription()
 {}
 
-Subscription::Subscription(const std::weak_ptr<IRegistation>& registration)
-	: _registration(registration)
+Subscription::Subscription(std::weak_ptr<IRegistation>&& registration)
+	: _registration(std::move(registration))
 {}
 
 Subscription::Subscription(Subscription && other)
