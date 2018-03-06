@@ -8,7 +8,7 @@
 
 namespace CppSignal
 {
-	enum class SlotStatus
+	enum class RegistrationStatus
 	{
 		Unknown,
 		Empty,
@@ -19,15 +19,15 @@ namespace CppSignal
 		PendingDestruction
 	};
 
-	class ISlot
+	class IRegistation
 	{
 	public:
-		ISlot();
+		IRegistation();
 
-		virtual ~ISlot() = default;
+		virtual ~IRegistation() = default;
 		virtual void Unsubscribe() = 0;
 
-		std::atomic<SlotStatus> _status;
+		std::atomic<RegistrationStatus> _status;
 	};
 
 	class Subscription;
@@ -38,7 +38,7 @@ namespace CppSignal
 	public:
 		using Callback = std::function<void(TSignalParameters...)>;
 
-		class Slot : public ISlot
+		class Registration : public IRegistation
 		{
 		public:
 			void Unsubscribe() override;
@@ -46,7 +46,7 @@ namespace CppSignal
 			Callback _callback;
 		};
 
-		Signal(int numberOfMaxSlots = 5);
+		Signal(int numberOfMaxRegistrations = 5);
 
 		template<typename TPublisher>
 		Subscription Subscribe(const std::shared_ptr<TPublisher>& publisher, const Callback& callback);
@@ -57,11 +57,11 @@ namespace CppSignal
 		void Emit(TSignalParameters... signalParameters);
 
 	private:
-		ISlot & SaveCallbackToAnUnusedSlot(const Callback& callback);
-		ISlot & SaveCallbackToAnUnusedSlot(Callback&& callback);
+		IRegistation & SaveCallbackToAnUnusedRegistration(const Callback& callback);
+		IRegistation & SaveCallbackToAnUnusedRegistration(Callback&& callback);
 
-		// This container must not reallocate, because the subscriptions directly hold an aliasing smart pointer to the slot instances
-		std::vector<Slot> _slots;
+		// This container must not reallocate, because the subscriptions directly hold an aliasing smart pointer to the registration instances
+		std::vector<Registration> _registrations;
 	};
 
 	class Subscription
@@ -69,17 +69,19 @@ namespace CppSignal
 	public:
 		Subscription();
 
-		Subscription(const std::weak_ptr<ISlot>& slot);
+		Subscription(const std::weak_ptr<IRegistation>& registration);
 
 		Subscription(Subscription&& other);
 
 		Subscription& operator=(Subscription&& other);
 
+		void Unsubscribe();
+
 		~Subscription();
 
 	private:
-		// Aliasing smart pointer: the control block belongs to the publisher, the pointer belongs to the slot
-		std::weak_ptr<ISlot> _slot;
+		// Aliasing smart pointer: the control block belongs to the publisher, the pointer belongs to the registration
+		std::weak_ptr<IRegistation> _registration;
 	};
 
 // ==========================================================================================================================
@@ -89,134 +91,134 @@ namespace CppSignal
 	Subscription Signal<TSignalParameters...>::Subscribe(const std::shared_ptr<TPublisher>& publisher, const Callback& callback)
 	{
 		// This template method is duplicated for each Publisher type. To minimize the code here, the saving of the callback is outsourced
-		auto& slot = SaveCallbackToAnUnusedSlot(callback);
+		auto& registration = SaveCallbackToAnUnusedRegistration(callback);
 
-		auto slotPointer = std::shared_ptr<ISlot>(publisher, &slot);
-		return Subscription(std::weak_ptr<ISlot>(slotPointer));
+		auto registrationPointer = std::shared_ptr<IRegistation>(publisher, &registration);
+		return Subscription(std::weak_ptr<IRegistation>(registrationPointer));
 	}
 
 	template<typename ...TSignalParameters>
 	template<typename TPublisher>
 	Subscription Signal<TSignalParameters...>::Subscribe(const std::shared_ptr<TPublisher>& publisher, Callback && callback)
 	{
-		auto& slot = SaveCallbackToAnUnusedSlot(std::move(callback));
+		auto& registration = SaveCallbackToAnUnusedRegistration(std::move(callback));
 
-		auto slotPointer = std::shared_ptr<ISlot>(publisher, &slot);
-		return Subscription(std::weak_ptr<ISlot>(slotPointer));
+		auto registrationPointer = std::shared_ptr<IRegistation>(publisher, &registration);
+		return Subscription(std::weak_ptr<IRegistation>(registrationPointer));
 	}
 
 	template<typename ...TSignalParameters>
-	Signal<TSignalParameters...>::Signal(int numberOfMaxSlots)
-		: _slots(numberOfMaxSlots)
+	Signal<TSignalParameters...>::Signal(int numberOfMaxRegistrations)
+		: _registrations(numberOfMaxRegistrations)
 	{}
 
 	template<typename ...TSignalParameters>
 	void Signal<TSignalParameters...>::Emit(TSignalParameters ... signalParameters)
 	{
-		for (auto& slot : _slots)
+		for (auto& registration : _registrations)
 		{
-			SlotStatus lastKnownCurrentSlotStatus = slot._status;
-			if (lastKnownCurrentSlotStatus != SlotStatus::Used)
+			RegistrationStatus lastKnownCurrentRegistrationStatus = registration._status;
+			if (lastKnownCurrentRegistrationStatus != RegistrationStatus::Used)
 				continue;
 
-			auto transitionSucceeded = slot._status.compare_exchange_strong(lastKnownCurrentSlotStatus, SlotStatus::Emitting);
+			auto transitionSucceeded = registration._status.compare_exchange_strong(lastKnownCurrentRegistrationStatus, RegistrationStatus::Emitting);
 			if (!transitionSucceeded)
 				continue;
 
-			slot._callback(std::forward<TSignalParameters ...>(signalParameters)...);
+			registration._callback(std::forward<TSignalParameters ...>(signalParameters)...);
 
-			lastKnownCurrentSlotStatus = SlotStatus::Emitting;
-			transitionSucceeded = slot._status.compare_exchange_strong(lastKnownCurrentSlotStatus, SlotStatus::Used);
+			lastKnownCurrentRegistrationStatus = RegistrationStatus::Emitting;
+			transitionSucceeded = registration._status.compare_exchange_strong(lastKnownCurrentRegistrationStatus, RegistrationStatus::Used);
 
-			auto slotWasDestroyedDuringEmission = !transitionSucceeded;
-			if (slotWasDestroyedDuringEmission)
+			auto registrationWasDestroyedDuringEmission = !transitionSucceeded;
+			if (registrationWasDestroyedDuringEmission)
 			{
-				lastKnownCurrentSlotStatus = slot._status;
-				assert(lastKnownCurrentSlotStatus == SlotStatus::PendingDestruction);
+				lastKnownCurrentRegistrationStatus = registration._status;
+				assert(lastKnownCurrentRegistrationStatus == RegistrationStatus::PendingDestruction);
 
-				slot._callback = nullptr;
+				registration._callback = nullptr;
 
-				transitionSucceeded = slot._status.compare_exchange_strong(lastKnownCurrentSlotStatus, SlotStatus::Empty);
+				transitionSucceeded = registration._status.compare_exchange_strong(lastKnownCurrentRegistrationStatus, RegistrationStatus::Empty);
 				assert(transitionSucceeded);
 			}
 		}
 	}
 
 	template<typename ...TSignalParameters>
-	ISlot & Signal<TSignalParameters...>::SaveCallbackToAnUnusedSlot(const Callback & callback)
+	IRegistation & Signal<TSignalParameters...>::SaveCallbackToAnUnusedRegistration(const Callback & callback)
 	{
-		for (auto& slot : _slots)
+		for (auto& registration : _registrations)
 		{
-			SlotStatus lastKnownCurrentSlotStatus = slot._status;
-			if (lastKnownCurrentSlotStatus != SlotStatus::Empty)
+			RegistrationStatus lastKnownCurrentRegistrationStatus = registration._status;
+			if (lastKnownCurrentRegistrationStatus != RegistrationStatus::Empty)
 				continue;
 
-			auto transitionSucceeded = slot._status.compare_exchange_strong(lastKnownCurrentSlotStatus, SlotStatus::Populating);
+			auto transitionSucceeded = registration._status.compare_exchange_strong(lastKnownCurrentRegistrationStatus, RegistrationStatus::Populating);
 			if (!transitionSucceeded)
 				continue;
 
-			slot._callback = callback;
+			registration._callback = callback;
 
-			lastKnownCurrentSlotStatus = SlotStatus::Populating;
-			transitionSucceeded = slot._status.compare_exchange_strong(lastKnownCurrentSlotStatus, SlotStatus::Used);
+			lastKnownCurrentRegistrationStatus = RegistrationStatus::Populating;
+			transitionSucceeded = registration._status.compare_exchange_strong(lastKnownCurrentRegistrationStatus, RegistrationStatus::Used);
 			assert(transitionSucceeded);
 
-			return slot;
+			return registration;
 		}
 
-		// No free slot left
+		// No free registration left
 		throw std::bad_alloc();
 	}
 
 	template<typename ...TSignalParameters>
-	inline ISlot & Signal<TSignalParameters...>::SaveCallbackToAnUnusedSlot(Callback && callback)
+	IRegistation & Signal<TSignalParameters...>::SaveCallbackToAnUnusedRegistration(Callback && callback)
 	{
-		for (auto& slot : _slots)
+		for (auto& registration : _registrations)
 		{
-			SlotStatus lastKnownCurrentSlotStatus = slot._status;
-			if (lastKnownCurrentSlotStatus != SlotStatus::Empty)
+			RegistrationStatus lastKnownCurrentrRegistrationStatus = registration._status;
+			if (lastKnownCurrentrRegistrationStatus != RegistrationStatus::Empty)
 				continue;
 
-			auto transitionSucceeded = slot._status.compare_exchange_strong(lastKnownCurrentSlotStatus, SlotStatus::Populating);
+			auto transitionSucceeded = registration._status.compare_exchange_strong(lastKnownCurrentrRegistrationStatus, RegistrationStatus::Populating);
 			if (!transitionSucceeded)
 				continue;
 
-			slot._callback = std::move(callback);
+			registration._callback = std::move(callback);
 
-			lastKnownCurrentSlotStatus = SlotStatus::Populating;
-			transitionSucceeded = slot._status.compare_exchange_strong(lastKnownCurrentSlotStatus, SlotStatus::Used);
+			lastKnownCurrentrRegistrationStatus = RegistrationStatus::Populating;
+			transitionSucceeded = registration._status.compare_exchange_strong(lastKnownCurrentrRegistrationStatus, RegistrationStatus::Used);
 			assert(transitionSucceeded);
 
-			return slot;
+			return registration;
 		}
 
-		// No free slot left
+		// No free registration left
 		throw std::bad_alloc();
 	}
 
 	template<typename ...TSignalParameters>
-	void Signal<TSignalParameters...>::Slot::Unsubscribe()
+	void Signal<TSignalParameters...>::Registration::Unsubscribe()
 	{
 		bool stayInLoop = true;
 		while (stayInLoop)
 		{
-			SlotStatus lastKnownSlotStatus = _status;
-			switch (lastKnownSlotStatus)
+			RegistrationStatus lastKnownRegistrationStatus = _status;
+			switch (lastKnownRegistrationStatus)
 			{
-				case SlotStatus::Used:
+				case RegistrationStatus::Used:
 				{
-					auto transitionSucceeded = _status.compare_exchange_strong(lastKnownSlotStatus, SlotStatus::Destroying);
+					auto transitionSucceeded = _status.compare_exchange_strong(lastKnownRegistrationStatus, RegistrationStatus::Destroying);
 					if (transitionSucceeded)
 					{
 						_callback = nullptr;
-						_status = SlotStatus::Empty;
+						_status = RegistrationStatus::Empty;
 						stayInLoop = false;
 					}
 					break;
 				}
-				case SlotStatus::Emitting:
+				case RegistrationStatus::Emitting:
 				{
-					auto transitionSucceeded = _status.compare_exchange_strong(lastKnownSlotStatus, SlotStatus::PendingDestruction);
+					auto transitionSucceeded = _status.compare_exchange_strong(lastKnownRegistrationStatus, RegistrationStatus::PendingDestruction);
 					if (transitionSucceeded)
 						stayInLoop = false;
 					break;

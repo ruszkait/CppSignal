@@ -1,7 +1,7 @@
 #include "pch.h"
 #include "../CppSignal/CppSignal.h"
 
-class Publisher : public std::enable_shared_from_this<Publisher>
+class Thermometer : public std::enable_shared_from_this<Thermometer>
 {
 public:
 
@@ -41,23 +41,26 @@ TEST(ScopedSubscriptionTest, CppSignalTest)
 	auto temperatureNotification = 0.0;
 	auto freezingDays = 0;
 
-	auto publisher = std::make_shared<Publisher>();
+	auto thermometer = std::make_shared<Thermometer>();
 	{
-		auto sub1 = publisher->OnTemperatureChanged([&temperatureNotification](double value) { temperatureNotification = value; });
+		// Subscribe with an rvalue lambda - most efficient, because of the moving semantic
+		auto sub1 = thermometer->OnTemperatureChanged([&temperatureNotification](double value) { temperatureNotification = value; });
+		
+		// Subscribe with an lvalue function - the function gets copied to signal registrations
 		std::function<void()> freezingCallback = [&freezingDays]() { freezingDays++; };
-		auto sub2 = publisher->OnFreezing(freezingCallback);
+		auto sub2 = thermometer->OnFreezing(freezingCallback);
 
-		publisher->UpdateTemperature(40);
+		thermometer->UpdateTemperature(40);
 		EXPECT_DOUBLE_EQ(40.0, temperatureNotification);
 		EXPECT_EQ(0, freezingDays);
 
-		publisher->UpdateTemperature(-10);
+		thermometer->UpdateTemperature(-10);
 		EXPECT_DOUBLE_EQ(-10.0, temperatureNotification);
 		EXPECT_EQ(1, freezingDays);
 	}
 
 	// Subscriptions are gone, so the signals do not call the callbacks
-	publisher->UpdateTemperature(20);
+	thermometer->UpdateTemperature(20);
 	EXPECT_DOUBLE_EQ(-10.0, temperatureNotification);
 	EXPECT_EQ(1, freezingDays);
 }
@@ -69,25 +72,25 @@ TEST(MovedSubscriptionTest, CppSignalTest)
 
 	CppSignal::Subscription subScription;
 
-	auto publisher = std::make_shared<Publisher>();
+	auto thermometer = std::make_shared<Thermometer>();
 	{
-		auto sub1 = publisher->OnTemperatureChanged([&temperatureNotification](double value) { temperatureNotification = value; });
-		auto sub2 = publisher->OnFreezing([&freezingDays]() { freezingDays++; });
+		auto sub1 = thermometer->OnTemperatureChanged([&temperatureNotification](double value) { temperatureNotification = value; });
+		auto sub2 = thermometer->OnFreezing([&freezingDays]() { freezingDays++; });
 
 		// Move the first subscription to the outer scopem but not the second one
 		subScription = std::move(sub1);
 
-		publisher->UpdateTemperature(40);
+		thermometer->UpdateTemperature(40);
 		EXPECT_DOUBLE_EQ(40.0, temperatureNotification);
 		EXPECT_EQ(0, freezingDays);
 
-		publisher->UpdateTemperature(-10);
+		thermometer->UpdateTemperature(-10);
 		EXPECT_DOUBLE_EQ(-10.0, temperatureNotification);
 		EXPECT_EQ(1, freezingDays);
 	}
 
 	// Subscriptions are gone, so the signals do not call the callbacks
-	publisher->UpdateTemperature(-20);
+	thermometer->UpdateTemperature(-20);
 	EXPECT_DOUBLE_EQ(-20.0, temperatureNotification);
 	EXPECT_EQ(1, freezingDays);
 }
@@ -97,13 +100,13 @@ TEST(AbandonedPublisherTest, CppSignalTest)
 	auto temperatureNotification = 0.0;
 	auto freezingDays = 0;
 
-	auto publisher = std::make_shared<Publisher>();
+	auto thermometer = std::make_shared<Thermometer>();
 	{
-		auto sub1 = publisher->OnTemperatureChanged([&temperatureNotification](double value) { temperatureNotification = value; });
-		auto sub2 = publisher->OnFreezing([&freezingDays]() { freezingDays++; });
+		auto sub1 = thermometer->OnTemperatureChanged([&temperatureNotification](double value) { temperatureNotification = value; });
+		auto sub2 = thermometer->OnFreezing([&freezingDays]() { freezingDays++; });
 
 		// Remove the publisher right after the subscriptions
-		publisher.reset();
+		thermometer.reset();
 
 		// The unsubscription shall detect the lack of the publisher, and shall still destroy silently
 	}
@@ -114,10 +117,10 @@ TEST(SharedSubscriptionTest, CppSignalTest)
 	auto temperatureNotification = 0.0;
 	auto sharedSubscription = std::make_shared<CppSignal::Subscription>();
 
-	auto publisher = std::make_shared<Publisher>();
+	auto thermometer = std::make_shared<Thermometer>();
 	{
 		// Move the subscription to the shared subscription
-		*sharedSubscription = publisher->OnTemperatureChanged([&temperatureNotification](double value) { temperatureNotification = value; });
+		*sharedSubscription = thermometer->OnTemperatureChanged([&temperatureNotification](double value) { temperatureNotification = value; });
 
 		auto sharedSubscription2 = sharedSubscription;
 		auto sharedSubscription1 = sharedSubscription;
@@ -125,14 +128,30 @@ TEST(SharedSubscriptionTest, CppSignalTest)
 		// From here on the two other smart pointer keep the subscription alive
 		sharedSubscription.reset();
 
-		publisher->UpdateTemperature(40);
+		thermometer->UpdateTemperature(40);
 		EXPECT_DOUBLE_EQ(40.0, temperatureNotification);
 
-		publisher->UpdateTemperature(-10);
+		thermometer->UpdateTemperature(-10);
 		EXPECT_DOUBLE_EQ(-10.0, temperatureNotification);
 	}
 
 	// Subscriptions are gone, so the signals do not call the callbacks
-	publisher->UpdateTemperature(-20);
+	thermometer->UpdateTemperature(-20);
 	EXPECT_DOUBLE_EQ(-10.0, temperatureNotification);
+}
+
+TEST(SubscriptionReassignmentTest, CppSignalTest)
+{
+	auto thermometer = std::make_shared<Thermometer>();
+
+	auto temperatureNotification = 0.0;
+	auto subscription = thermometer->OnTemperatureChanged([&temperatureNotification](double value) { temperatureNotification = value; });
+		
+	// Reuse the Subscription instance for another subscription
+	auto freezingDays = 0;
+	subscription = thermometer->OnFreezing([&freezingDays]() { freezingDays++; });
+
+	thermometer->UpdateTemperature(-10);
+	EXPECT_DOUBLE_EQ(0.0, temperatureNotification);
+	EXPECT_EQ(1, freezingDays);
 }

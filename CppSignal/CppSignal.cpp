@@ -2,39 +2,48 @@
 
 using namespace CppSignal;
 
-ISlot::ISlot()
-	: _status(SlotStatus::Empty)
+IRegistation::IRegistation()
+	: _status(RegistrationStatus::Empty)
 {
 }
 
 Subscription::Subscription()
 {}
 
-Subscription::Subscription(const std::weak_ptr<ISlot>& slot)
-	: _slot(slot)
+Subscription::Subscription(const std::weak_ptr<IRegistation>& registration)
+	: _registration(registration)
 {}
 
 Subscription::Subscription(Subscription && other)
-	: _slot(std::move(other._slot))
+	: _registration(std::move(other._registration))
 {}
 
 Subscription& Subscription::operator=(Subscription&& other)
 {
-	if (this == &other)
+	bool isSelfAssignment = this == &other;
+	if (isSelfAssignment)
 		return *this;
 
-	_slot = std::move(other._slot);
+	Unsubscribe();
+
+	_registration = std::move(other._registration);
 	return *this;
 }
 
-Subscription::~Subscription()
+void CppSignal::Subscription::Unsubscribe()
 {
-	auto publisherStrongReference = _slot.lock();
+	auto publisherStrongReference = _registration.lock();
+	_registration.reset();
 
 	auto publisherStrongReferenceIsInvalid = !publisherStrongReference;
 	if (publisherStrongReferenceIsInvalid)
 		return;
 
-	auto& slotReference = publisherStrongReference;
-	slotReference->Unsubscribe();
+	auto& registrationReference = publisherStrongReference;
+	registrationReference->Unsubscribe();
+}
+
+Subscription::~Subscription()
+{
+	Unsubscribe();
 }
