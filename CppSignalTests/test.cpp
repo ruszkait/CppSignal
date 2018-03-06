@@ -187,7 +187,7 @@ TEST(ParallelEmissionTest, CppSignalTest)
 		callbackCount++;
 	});
 
-	const int numberOfIterations = 100000;
+	const int numberOfIterations = 1000000;
 
 	std::thread thread1([thermometer, numberOfIterations]
 	{
@@ -205,4 +205,64 @@ TEST(ParallelEmissionTest, CppSignalTest)
 	thread2.join();
 
 	EXPECT_EQ(2*numberOfIterations, callbackCount);
+}
+
+TEST(StressTest, CppSignalTest)
+{
+	auto thermometer = std::make_shared<Thermometer>();
+
+	std::atomic<int> callbackCount(0);
+	const int numberOfIterations = 1000000;
+
+	// Subcribe and unsubscribe after each 50 cycle
+	std::thread thread1([thermometer, numberOfIterations, &callbackCount]
+	{
+		CppSignal::Subscription subscription;
+
+		for (int i = 0; i < numberOfIterations; ++i)
+		{
+			if (i % 100 == 0)
+			{
+				subscription = thermometer->OnTemperatureChanged([&callbackCount](double value)
+				{
+					callbackCount++;
+				});
+			}
+
+			if (i % 100 == 50)
+			{
+				subscription.Unsubscribe();
+			}
+
+			thermometer->UpdateTemperature(10);
+		}
+	});
+
+	std::thread thread2([thermometer, numberOfIterations, &callbackCount]
+	{
+		CppSignal::Subscription subscription;
+
+		for (int i = 0; i < numberOfIterations; ++i)
+		{
+			if (i % 100 == 0)
+			{
+				subscription = thermometer->OnTemperatureChanged([&callbackCount](double value)
+				{
+					callbackCount++;
+				});
+			}
+
+			if (i % 100 == 50)
+			{
+				subscription.Unsubscribe();
+			}
+
+			thermometer->UpdateTemperature(10);
+		}
+	});
+
+	thread1.join();
+	thread2.join();
+
+	ASSERT_LE(numberOfIterations, callbackCount);
 }
