@@ -3,7 +3,8 @@
 #include <functional>
 #include <atomic>
 #include <memory>
-#include <array>
+#include <vector>
+#include <utility>
 
 namespace CppSignal
 {
@@ -45,13 +46,22 @@ namespace CppSignal
 			Callback _callback;
 		};
 
+		Signal(int numberOfMaxSlots = 5);
+
 		template<typename TPublisher>
 		Subscription Subscribe(const std::shared_ptr<TPublisher>& publisher, const Callback& callback);
 
+		template<typename TPublisher>
+		Subscription Subscribe(const std::shared_ptr<TPublisher>& publisher, Callback&& callback);
+		
 		void Emit(TSignalParameters... signalParameters);
 
 	private:
-		std::array<Slot, 10> _slots;
+		ISlot & SaveCallbackToAnUnusedSlot(const Callback& callback);
+		ISlot & SaveCallbackToAnUnusedSlot(Callback&& callback);
+
+		// This container must not reallocate, because the subscriptions directly hold an aliasing smart pointer to the slot instances
+		std::vector<Slot> _slots;
 	};
 
 	class Subscription
@@ -78,26 +88,27 @@ namespace CppSignal
 	template<typename TPublisher>
 	Subscription Signal<TSignalParameters...>::Subscribe(const std::shared_ptr<TPublisher>& publisher, const Callback& callback)
 	{
-		for (auto& slot : _slots)
-		{
-			SlotStatus lastKnownCurrentSlotStatus = slot._status;
-			if (lastKnownCurrentSlotStatus != SlotStatus::Empty)
-				continue;
+		// This template method is duplicated for each Publisher type. To minimize the code here, the saving of the callback is outsourced
+		auto& slot = SaveCallbackToAnUnusedSlot(callback);
 
-			auto transitionSucceeded = slot._status.compare_exchange_strong(lastKnownCurrentSlotStatus, SlotStatus::Populating);
-			if (!transitionSucceeded)
-				continue;
-
-			slot._callback = callback;
-			slot._status = SlotStatus::Used;
-
-			auto slotPointer = std::shared_ptr<ISlot>(publisher, &slot);
-			return Subscription(std::weak_ptr<ISlot>(slotPointer));
-		}
-
-		// No free slot left
-		throw std::bad_alloc();
+		auto slotPointer = std::shared_ptr<ISlot>(publisher, &slot);
+		return Subscription(std::weak_ptr<ISlot>(slotPointer));
 	}
+
+	template<typename ...TSignalParameters>
+	template<typename TPublisher>
+	Subscription Signal<TSignalParameters...>::Subscribe(const std::shared_ptr<TPublisher>& publisher, Callback && callback)
+	{
+		auto& slot = SaveCallbackToAnUnusedSlot(std::move(callback));
+
+		auto slotPointer = std::shared_ptr<ISlot>(publisher, &slot);
+		return Subscription(std::weak_ptr<ISlot>(slotPointer));
+	}
+
+	template<typename ...TSignalParameters>
+	Signal<TSignalParameters...>::Signal(int numberOfMaxSlots)
+		: _slots(numberOfMaxSlots)
+	{}
 
 	template<typename ...TSignalParameters>
 	void Signal<TSignalParameters...>::Emit(TSignalParameters ... signalParameters)
@@ -105,8 +116,7 @@ namespace CppSignal
 		for (auto& slot : _slots)
 		{
 			SlotStatus lastKnownCurrentSlotStatus = slot._status;
-			auto slotIsNotEligibleForEmission = lastKnownCurrentSlotStatus != SlotStatus::Used;
-			if (slotIsNotEligibleForEmission)
+			if (lastKnownCurrentSlotStatus != SlotStatus::Used)
 				continue;
 
 			auto transitionSucceeded = slot._status.compare_exchange_strong(lastKnownCurrentSlotStatus, SlotStatus::Emitting);
@@ -125,10 +135,63 @@ namespace CppSignal
 				assert(lastKnownCurrentSlotStatus == SlotStatus::PendingDestruction);
 
 				slot._callback = nullptr;
+
 				transitionSucceeded = slot._status.compare_exchange_strong(lastKnownCurrentSlotStatus, SlotStatus::Empty);
 				assert(transitionSucceeded);
 			}
 		}
+	}
+
+	template<typename ...TSignalParameters>
+	ISlot & Signal<TSignalParameters...>::SaveCallbackToAnUnusedSlot(const Callback & callback)
+	{
+		for (auto& slot : _slots)
+		{
+			SlotStatus lastKnownCurrentSlotStatus = slot._status;
+			if (lastKnownCurrentSlotStatus != SlotStatus::Empty)
+				continue;
+
+			auto transitionSucceeded = slot._status.compare_exchange_strong(lastKnownCurrentSlotStatus, SlotStatus::Populating);
+			if (!transitionSucceeded)
+				continue;
+
+			slot._callback = callback;
+
+			lastKnownCurrentSlotStatus = SlotStatus::Populating;
+			transitionSucceeded = slot._status.compare_exchange_strong(lastKnownCurrentSlotStatus, SlotStatus::Used);
+			assert(transitionSucceeded);
+
+			return slot;
+		}
+
+		// No free slot left
+		throw std::bad_alloc();
+	}
+
+	template<typename ...TSignalParameters>
+	inline ISlot & Signal<TSignalParameters...>::SaveCallbackToAnUnusedSlot(Callback && callback)
+	{
+		for (auto& slot : _slots)
+		{
+			SlotStatus lastKnownCurrentSlotStatus = slot._status;
+			if (lastKnownCurrentSlotStatus != SlotStatus::Empty)
+				continue;
+
+			auto transitionSucceeded = slot._status.compare_exchange_strong(lastKnownCurrentSlotStatus, SlotStatus::Populating);
+			if (!transitionSucceeded)
+				continue;
+
+			slot._callback = std::move(callback);
+
+			lastKnownCurrentSlotStatus = SlotStatus::Populating;
+			transitionSucceeded = slot._status.compare_exchange_strong(lastKnownCurrentSlotStatus, SlotStatus::Used);
+			assert(transitionSucceeded);
+
+			return slot;
+		}
+
+		// No free slot left
+		throw std::bad_alloc();
 	}
 
 	template<typename ...TSignalParameters>
