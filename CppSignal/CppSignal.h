@@ -181,30 +181,41 @@ namespace CppSignal
 	template<typename ...TSignalParameters>
 	void Signal<TSignalParameters...>::Registration::Deallocate()
 	{
-		bool stayInLoop = true;
-		while (stayInLoop)
+		while (true)
 		{
 			RegistrationStatus lastKnownRegistrationStatus = _status;
 			switch (lastKnownRegistrationStatus)
 			{
 				case RegistrationStatus::Used:
 				{
+					// If multiple threads come here, only one of them manages to do the transition
+					// The one, that made the transition is responsible to cleanup the Registration
 					auto transitionSucceeded = _status.compare_exchange_strong(lastKnownRegistrationStatus, RegistrationStatus::Destroying);
 					if (transitionSucceeded)
 					{
 						_callback = nullptr;
-						_status = RegistrationStatus::Empty;
-						stayInLoop = false;
+						lastKnownRegistrationStatus = RegistrationStatus::Destroying;
+						transitionSucceeded = _status.compare_exchange_strong(lastKnownRegistrationStatus, RegistrationStatus::Empty);
+						assert(transitionSucceeded);
+						return;
 					}
-					break;
 				}
+				break;
 				case RegistrationStatus::Emitting:
 				{
 					auto transitionSucceeded = _status.compare_exchange_strong(lastKnownRegistrationStatus, RegistrationStatus::PendingDestruction);
 					if (transitionSucceeded)
-						stayInLoop = false;
-					break;
+						return;
 				}
+				break;
+				case RegistrationStatus::Empty:
+				case RegistrationStatus::Destroying:
+				case RegistrationStatus::PendingDestruction:
+					// We end up here if multiple threads try to free this Registration
+					// The job was done anyway, so we can return from here
+					return;
+				default:
+					assert(false);
 			}
 		}
 	}
@@ -212,17 +223,17 @@ namespace CppSignal
 	template<typename ...TSignalParameters>
 	void Signal<TSignalParameters...>::Registration::Emit(TSignalParameters ... signalParameters)
 	{
-		RegistrationStatus lastKnownCurrentRegistrationStatus;
+		RegistrationStatus lastExpectedCurrentRegistrationStatus;
 
 		bool transitionSucceeded;
 		while (true)
 		{
-			lastKnownCurrentRegistrationStatus = RegistrationStatus::Used;
-			transitionSucceeded = _status.compare_exchange_strong(lastKnownCurrentRegistrationStatus, RegistrationStatus::Emitting);
+			lastExpectedCurrentRegistrationStatus = RegistrationStatus::Used;
+			transitionSucceeded = _status.compare_exchange_strong(lastExpectedCurrentRegistrationStatus, RegistrationStatus::Emitting);
 			if (transitionSucceeded)
 				break;
 
-			auto anEmissionIsAlreadyRunningFromAnotherThread = lastKnownCurrentRegistrationStatus == RegistrationStatus::Emitting;
+			auto anEmissionIsAlreadyRunningFromAnotherThread = lastExpectedCurrentRegistrationStatus == RegistrationStatus::Emitting;
 			if (anEmissionIsAlreadyRunningFromAnotherThread)
 			{
 				std::this_thread::sleep_for(std::chrono::milliseconds(1));
@@ -235,18 +246,18 @@ namespace CppSignal
 
 		_callback(std::forward<TSignalParameters ...>(signalParameters)...);
 
-		lastKnownCurrentRegistrationStatus = RegistrationStatus::Emitting;
-		transitionSucceeded = _status.compare_exchange_strong(lastKnownCurrentRegistrationStatus, RegistrationStatus::Used);
+		lastExpectedCurrentRegistrationStatus = RegistrationStatus::Emitting;
+		transitionSucceeded = _status.compare_exchange_strong(lastExpectedCurrentRegistrationStatus, RegistrationStatus::Used);
 
 		auto registrationWasDestroyedDuringEmission = !transitionSucceeded;
 		if (registrationWasDestroyedDuringEmission)
 		{
-			lastKnownCurrentRegistrationStatus = _status;
-			assert(lastKnownCurrentRegistrationStatus == RegistrationStatus::PendingDestruction);
+			lastExpectedCurrentRegistrationStatus = _status;
+			assert(lastExpectedCurrentRegistrationStatus == RegistrationStatus::PendingDestruction);
 
 			_callback = nullptr;
 
-			transitionSucceeded = _status.compare_exchange_strong(lastKnownCurrentRegistrationStatus, RegistrationStatus::Empty);
+			transitionSucceeded = _status.compare_exchange_strong(lastExpectedCurrentRegistrationStatus, RegistrationStatus::Empty);
 			assert(transitionSucceeded);
 		}
 	}

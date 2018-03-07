@@ -4,6 +4,12 @@
 class Thermometer : public std::enable_shared_from_this<Thermometer>
 {
 public:
+	const int MaxNumberOfSignalRegistration = 10;
+
+	Thermometer()
+		: _signalTemperatureChanged(MaxNumberOfSignalRegistration)
+		, _signalFreezing(MaxNumberOfSignalRegistration)
+	{}
 
 	// This template subscription covers the const reference passing and the lvalue moving
 	template<typename TCallback>
@@ -63,6 +69,25 @@ TEST(ScopedSubscriptionTest, CppSignalTest)
 	thermometer->UpdateTemperature(20);
 	EXPECT_DOUBLE_EQ(-10.0, temperatureNotification);
 	EXPECT_EQ(1, freezingDays);
+}
+
+TEST(NoFreeRegistrationLeftTest, CppSignalTest)
+{
+	auto thermometer = std::make_shared<Thermometer>();
+
+	// Use all the available Registration
+	std::vector<CppSignal::Subscription> subscriptions(thermometer->MaxNumberOfSignalRegistration);
+	for (int i = 0; i < thermometer->MaxNumberOfSignalRegistration; ++i)
+		subscriptions[i] = thermometer->OnTemperatureChanged([](double) { });
+
+	// No free Registration is left, the subscription fails
+	ASSERT_THROW(thermometer->OnTemperatureChanged([](double) { }), std::bad_alloc);
+
+	// Remove all the subscriptions
+	subscriptions.clear();
+
+	// This time there shall be a place for this subscription
+	ASSERT_NO_THROW(thermometer->OnTemperatureChanged([](double) {}), std::bad_alloc);
 }
 
 TEST(MovedSubscriptionTest, CppSignalTest)
@@ -200,6 +225,25 @@ TEST(SelfUnsubscriptionInEmissionTest, CppSignalTest)
 	EXPECT_DOUBLE_EQ(-10.0, temperatureNotification);
 }
 
+TEST(SingleThreadedEmissionTest, CppSignalTest)
+{
+	auto thermometer = std::make_shared<Thermometer>();
+
+	int callbackCount(0);
+
+	CppSignal::Subscription subscription;
+	subscription = thermometer->OnTemperatureChanged([&callbackCount](double value)
+	{
+		++callbackCount;
+	});
+
+	const int numberOfIterations = 1'000'000;
+	for (int i = 0; i < numberOfIterations; ++i)
+		thermometer->UpdateTemperature(10.0);
+
+	EXPECT_EQ(numberOfIterations, callbackCount);
+}
+
 TEST(ParallelEmissionTest, CppSignalTest)
 {
 	auto thermometer = std::make_shared<Thermometer>();
@@ -212,7 +256,7 @@ TEST(ParallelEmissionTest, CppSignalTest)
 		callbackCount++;
 	});
 
-	const int numberOfIterations = 1000000;
+	const int numberOfIterations = 1'000'000;
 
 	std::thread thread1([thermometer, numberOfIterations]
 	{
@@ -237,7 +281,7 @@ TEST(StressTest, CppSignalTest)
 	auto thermometer = std::make_shared<Thermometer>();
 
 	std::atomic<int> callbackCount(0);
-	const int numberOfIterations = 1000000;
+	const int numberOfIterations = 1'000'000;
 
 	// Subcribe and unsubscribe after each 50 cycle
 	std::thread thread1([thermometer, numberOfIterations, &callbackCount]

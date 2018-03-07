@@ -28,11 +28,12 @@ Subscription& Subscription::operator=(Subscription&& other)
 void CppSignal::Subscription::Unsubscribe()
 {
 	auto publisherStrongReference = _registration.lock();
-	_registration.reset();
 
 	auto publisherStrongReferenceIsInvalid = !publisherStrongReference;
 	if (publisherStrongReferenceIsInvalid)
 		return;
+
+	_registration.reset();
 
 	auto& registrationReference = publisherStrongReference;
 	registrationReference->Deallocate();
