@@ -1,6 +1,7 @@
 # CppSignal
 PubSub pattern implemented in C++
 
+- Based only platform independent modern C++, no external library dependency
 - Lockfree implementation (no mutexes)
 - Signals are strongly typed
 - The signal publisher must be pointer by a shared_ptr
