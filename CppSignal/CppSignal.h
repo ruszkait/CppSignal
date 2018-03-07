@@ -105,6 +105,7 @@ namespace CppSignal
 			auto subscrptionAccepted = registration.TryAllocate(callback);
 			if (subscrptionAccepted)
 			{
+				// Aliasing smart pointer: holds the control blocks of the publisher and the pointer to the registration
 				auto registrationPointer = std::shared_ptr<IRegistration>(publisher, &registration);
 				return Subscription(registrationPointer);
 			}

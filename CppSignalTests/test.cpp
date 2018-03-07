@@ -156,6 +156,31 @@ TEST(SubscriptionReassignmentTest, CppSignalTest)
 	EXPECT_EQ(1, freezingDays);
 }
 
+TEST(CallbackWithCaptureTest, CppSignalTest)
+{
+	auto thermometer = std::make_shared<Thermometer>();
+
+	auto temperatureNotification = std::make_shared<double>(0.0);
+	std::weak_ptr<double> temperatureNotificationObserver = temperatureNotification;
+
+	EXPECT_TRUE(!temperatureNotificationObserver.expired());
+
+	auto subscription = thermometer->OnTemperatureChanged([temperatureNotification](double value) { *temperatureNotification = value; });
+
+	thermometer->UpdateTemperature(-10);
+	EXPECT_DOUBLE_EQ(-10.0, *temperatureNotification);
+
+	// Release the "temperatureNotification" from the main scope. It is only held now by the callback capture
+	temperatureNotification.reset();
+
+	// The callback still holds the "temperatureNotification"
+	EXPECT_TRUE(!temperatureNotificationObserver.expired());
+
+	// Release the callback and the object shall be gone - so the callback was completely removed (not a lazy way)
+	subscription.Unsubscribe();
+	EXPECT_TRUE(temperatureNotificationObserver.expired());
+}
+
 TEST(SelfUnsubscriptionInEmissionTest, CppSignalTest)
 {
 	auto thermometer = std::make_shared<Thermometer>();
