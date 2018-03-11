@@ -87,7 +87,7 @@ TEST(NoFreeRegistrationLeftTest, CppSignalTest)
 	subscriptions.clear();
 
 	// This time there shall be a place for this subscription
-	ASSERT_NO_THROW(thermometer->OnTemperatureChanged([](double) {}), std::bad_alloc);
+	ASSERT_NO_THROW(thermometer->OnTemperatureChanged([](double) {}));
 }
 
 TEST(MovedSubscriptionTest, CppSignalTest)

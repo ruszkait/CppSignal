@@ -55,7 +55,6 @@ namespace CppSignal
 				Used,
 				Emitting,
 				Destroying,
-				PendingDestruction
 			};
 
 			std::atomic<RegistrationStatus> _status = RegistrationStatus::Empty;
@@ -137,9 +136,7 @@ namespace CppSignal
 	void Signal<TSignalParameters...>::Emit(TSignalParameters ... signalParameters)
 	{
 		for (auto& registration : _registrations)
-		{
 			registration.Emit(std::forward<TSignalParameters ...>(signalParameters)...);
-		}
 	}
 
 // ==========================================================================================================================
@@ -193,7 +190,14 @@ namespace CppSignal
 					auto transitionSucceeded = _status.compare_exchange_strong(lastKnownRegistrationStatus, RegistrationStatus::Destroying);
 					if (transitionSucceeded)
 					{
-						_callback = nullptr;
+						try
+						{
+							// The std::function destructor might throw exceptions
+							_callback = nullptr;
+						}
+						catch (...)
+						{ }
+
 						lastKnownRegistrationStatus = RegistrationStatus::Destroying;
 						transitionSucceeded = _status.compare_exchange_strong(lastKnownRegistrationStatus, RegistrationStatus::Empty);
 						assert(transitionSucceeded);
@@ -203,14 +207,13 @@ namespace CppSignal
 				break;
 				case RegistrationStatus::Emitting:
 				{
-					auto transitionSucceeded = _status.compare_exchange_strong(lastKnownRegistrationStatus, RegistrationStatus::PendingDestruction);
+					auto transitionSucceeded = _status.compare_exchange_strong(lastKnownRegistrationStatus, RegistrationStatus::Destroying);
 					if (transitionSucceeded)
 						return;
 				}
 				break;
 				case RegistrationStatus::Empty:
 				case RegistrationStatus::Destroying:
-				case RegistrationStatus::PendingDestruction:
 					// We end up here if multiple threads try to free this Registration
 					// The job was done anyway, so we can return from here
 					return;
@@ -244,7 +247,13 @@ namespace CppSignal
 			return;
 		}
 
-		_callback(std::forward<TSignalParameters ...>(signalParameters)...);
+		try
+		{
+			// The callback exceptions must be handled here, otherwise they might mess up the state administration
+			_callback(std::forward<TSignalParameters ...>(signalParameters)...);
+		}
+		catch(...)
+		{ }
 
 		lastExpectedCurrentRegistrationStatus = RegistrationStatus::Emitting;
 		transitionSucceeded = _status.compare_exchange_strong(lastExpectedCurrentRegistrationStatus, RegistrationStatus::Used);
@@ -253,13 +262,18 @@ namespace CppSignal
 		if (registrationWasDestroyedDuringEmission)
 		{
 			lastExpectedCurrentRegistrationStatus = _status;
-			assert(lastExpectedCurrentRegistrationStatus == RegistrationStatus::PendingDestruction);
+			assert(lastExpectedCurrentRegistrationStatus == RegistrationStatus::Destroying);
 
-			_callback = nullptr;
+			try
+			{
+				// The std::function destructor might throw exceptions
+				_callback = nullptr;
+			}
+			catch(...)
+			{ }
 
 			transitionSucceeded = _status.compare_exchange_strong(lastExpectedCurrentRegistrationStatus, RegistrationStatus::Empty);
 			assert(transitionSucceeded);
 		}
 	}
-
 }
