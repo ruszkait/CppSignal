@@ -30,10 +30,10 @@ public:
 		return _signalFreezing.Subscribe(shared_from_this(), std::forward<TCallback&&>(callback));
 	}
 
-	void UpdateTemperature(double newTmeprature)
+	void UpdateTemperature(const double newTemperature)
 	{
-		_signalTemperatureChanged.Emit(newTmeprature);
-		if (newTmeprature < 0.0)
+		_signalTemperatureChanged.Emit(newTemperature);
+		if (newTemperature < 0.0)
 			_signalFreezing.Emit();
 	}
 
